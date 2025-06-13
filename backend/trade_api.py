@@ -726,6 +726,7 @@ def trade_order(req: TradeRequest):
 
         results = []
         successful_trades = 0
+        entry_type = "position" if req.order_type == "market" else "order"
 
         # Execute trade for each account
         for account_config in ACCOUNTS_CONFIG:
@@ -750,10 +751,7 @@ def trade_order(req: TradeRequest):
 
             if result["success"]:
                 successful_trades += 1
-
-            # In trade_order endpoint after placing trade
-            if result["success"]:
-                entry_type = "position" if req.order_type == "market" else "order"
+                # Annotate result with the entry type
                 result["entry_type"] = entry_type
 
             time.sleep(1)
