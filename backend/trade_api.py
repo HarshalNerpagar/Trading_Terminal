@@ -515,7 +515,7 @@
 
 ############################
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, validator
 import MetaTrader5 as mt5
@@ -524,8 +524,10 @@ import os
 from typing import Optional, List, Dict, Any
 import json
 from datetime import datetime
-# from fastapi import WebSocket, WebSocketDisconnect
-# import asyncio
+from datetime import timedelta
+import threading
+import time as t
+
 app = FastAPI()
 
 # CORS middleware
@@ -537,8 +539,54 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory storage for trade tracking (use database in production)
+# In-memory storage for trade tracking
 trade_sessions = {}
+trade_history = {}
+EXPIRATION_HOURS = 24  # Sessions expire after 24 hours
+
+
+def clean_expired_sessions():
+    while True:
+        now = datetime.now()
+        expired = []
+
+        for session_id, session_data in list(trade_sessions.items()):  # Use list to avoid runtime mutation
+            created = datetime.fromisoformat(session_data["timestamp"])
+            if (now - created) > timedelta(hours=EXPIRATION_HOURS):
+                expired.append(session_id)
+
+        for session_id in expired:
+            session_data = trade_sessions[session_id]
+            # Calculate actual profit instead of setting to 0
+            total_profit = 0.0
+            account_profits = []
+
+            for account_result in session_data["results"]:
+                if account_result["result"]["success"]:
+                    # Attempt to close position and capture profit
+                    close_result = close_position_by_ticket(account_result["result"]["order_id"])
+                    if close_result["success"]:
+                        profit = close_result.get("profit", 0)
+                        total_profit += profit
+                        account_profits.append({
+                            "account": account_result["account"],
+                            "profit": profit
+                        })
+
+            trade_history[session_id] = {
+                **session_data,
+                "closing_time": now.isoformat(),
+                "total_profit": total_profit,
+                "account_profits": account_profits,
+                "expired": True
+            }
+            del trade_sessions[session_id]
+
+        t.sleep(3600)  # Run every hour
+
+# Start the cleanup thread
+cleanup_thread = threading.Thread(target=clean_expired_sessions, daemon=True)
+cleanup_thread.start()
 
 
 class TradeRequest(BaseModel):
@@ -602,6 +650,70 @@ ACCOUNTS_CONFIG = [
 ]
 
 
+def close_position_by_ticket(position_ticket: int) -> dict:
+    """Close position by ticket number and return profit"""
+    try:
+        # Get the position by ticket
+        positions = mt5.positions_get(ticket=position_ticket)
+        if positions is None or len(positions) == 0:
+            return {"success": False, "error": f"No position found with ticket {position_ticket}"}
+
+        position = positions[0]
+        symbol = position.symbol
+        volume = position.volume
+        deviation = 10
+        profit = position.profit  # Capture profit before closing
+
+        # Get current tick price
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            return {"success": False, "error": f"Failed to get tick for {symbol}"}
+
+        # Determine opposite order type to close the position
+        if position.type == mt5.POSITION_TYPE_BUY:
+            order_type = mt5.ORDER_TYPE_SELL
+            price = tick.bid
+        else:  # POSITION_TYPE_SELL
+            order_type = mt5.ORDER_TYPE_BUY
+            price = tick.ask
+
+        close_request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": volume,
+            "type": order_type,
+            "position": position_ticket,
+            "price": price,
+            "deviation": deviation,
+            "magic": 234000,
+            "comment": "Close position via API",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_FOK,
+        }
+
+        result = mt5.order_send(close_request)
+
+        if result is None:
+            error = mt5.last_error()
+            return {"success": False, "error": f"close failed: {error}"}
+
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            return {
+                "success": False,
+                "error": f"Close failed: retcode={result.retcode}, comment={result.comment}"
+            }
+
+        # Return profit with success status
+        return {
+            "success": True,
+            "ticket": position_ticket,
+            "closed_volume": result.volume,
+            "profit": position.profit  # Add profit information
+        }
+
+    except Exception as e:
+        return {"success": False, "error": f"Exception in close_position: {str(e)}"}
+
 def convert_symbol_format(pair: str) -> str:
     """Convert standard forex pair to broker-specific format"""
     symbol_mappings = {
@@ -627,27 +739,7 @@ REALTIME_PAIRS = [
     "NZDUSD", "EURJPY", "GBPJPY", "EURGBP", "AUDCAD", "CADJPY"
 ]
 
-# @app.websocket("/ws/realtime-prices")
-# async def websocket_endpoint(websocket: WebSocket):
-#     await websocket.accept()
-#     ACTIVE_CONNECTIONS.add(websocket)
-#     try:
-#         while True:
-#             prices = {}
-#             for pair in REALTIME_PAIRS:
-#                 symbol = convert_symbol_format(pair)
-#                 if ensure_symbol_ready(symbol):
-#                     tick = mt5.symbol_info_tick(symbol)
-#                     if tick:
-#                         prices[pair] = {
-#                             "bid": tick.bid,
-#                             "ask": tick.ask,
-#                             "spread": round(tick.ask - tick.bid, 5)
-#                         }
-#             await websocket.send_json(prices)
-#             await asyncio.sleep(1)  # Update frequency
-#     except WebSocketDisconnect:
-#         ACTIVE_CONNECTIONS.remove(websocket)
+
 
 def ensure_symbol_ready(symbol: str) -> bool:
     """Ensure symbol is visible in Market Watch"""
@@ -725,20 +817,40 @@ def place_trade(symbol: str, action: str, volume: float, price: float, stop_loss
 
 
 def modify_position_sl_tp(position_ticket: int, symbol: str, new_sl: Optional[float], new_tp: Optional[float]) -> dict:
-    """Modify position stop loss and take profit"""
+    """Modify position stop loss and take profit with current values preservation"""
     try:
+        positions = mt5.positions_get(ticket=position_ticket)
+        if not positions:
+            return {"success": False, "error": f"No position found with ticket {position_ticket}"}
+
+        position = positions[0]
+        current_sl = position.sl
+        current_tp = position.tp
+
+        # Validate new prices against current position
+        if new_sl is not None:
+            if (position.type == mt5.POSITION_TYPE_BUY and new_sl >= position.price_open) or \
+               (position.type == mt5.POSITION_TYPE_SELL and new_sl <= position.price_open):
+                return {"success": False, "error": "Invalid stop loss level"}
+
+        if new_tp is not None:
+            if (position.type == mt5.POSITION_TYPE_BUY and new_tp <= position.price_open) or \
+               (position.type == mt5.POSITION_TYPE_SELL and new_tp >= position.price_open):
+                return {"success": False, "error": "Invalid take profit level"}
+
+        # Preserve existing values if not provided
+        updated_sl = new_sl if new_sl is not None else current_sl
+        updated_tp = new_tp if new_tp is not None else current_tp
+
         modify_request = {
             "action": mt5.TRADE_ACTION_SLTP,
             "position": position_ticket,
             "symbol": symbol,
+            "sl": updated_sl,
+            "tp": updated_tp,
             "magic": 234000,
             "comment": "Modify SL/TP via API",
         }
-
-        if new_sl is not None:
-            modify_request["sl"] = new_sl
-        if new_tp is not None:
-            modify_request["tp"] = new_tp
 
         result = mt5.order_send(modify_request)
 
@@ -755,8 +867,8 @@ def modify_position_sl_tp(position_ticket: int, symbol: str, new_sl: Optional[fl
         return {
             "success": True,
             "ticket": position_ticket,
-            "new_sl": new_sl,
-            "new_tp": new_tp
+            "new_sl": updated_sl,
+            "new_tp": updated_tp
         }
 
     except Exception as e:
@@ -768,13 +880,14 @@ def close_position_by_ticket(position_ticket: int) -> dict:
     try:
         # Get the position by ticket
         positions = mt5.positions_get(ticket=position_ticket)
-        if positions is None or len(positions) == 0:
+        if not positions:
             return {"success": False, "error": f"No position found with ticket {position_ticket}"}
 
         position = positions[0]
         symbol = position.symbol
         volume = position.volume
         deviation = 10
+        profit = position.profit
 
         # Get current tick price
         tick = mt5.symbol_info_tick(symbol)
@@ -818,7 +931,8 @@ def close_position_by_ticket(position_ticket: int) -> dict:
         return {
             "success": True,
             "ticket": position_ticket,
-            "closed_volume": result.volume
+            "closed_volume": result.volume,
+            "profit": profit  # Return captured profit
         }
 
     except Exception as e:
@@ -1079,12 +1193,15 @@ def close_positions(req: CloseRequest):
         if req.session_id not in trade_sessions:
             raise HTTPException(status_code=404, detail="Session not found")
 
+        session_data = trade_sessions[req.session_id]
         active_positions = get_active_positions_for_session(req.session_id)
         if not active_positions:
             raise HTTPException(status_code=404, detail="No active positions found for this session")
 
         results = []
         successful_closures = 0
+        total_profit = 0.0
+        account_profits = []
 
         # Close positions for each account
         for position in active_positions:
@@ -1095,8 +1212,6 @@ def close_positions(req: CloseRequest):
 
             if not account_config:
                 continue
-
-            print(f"\nClosing position {position['ticket']} for account {position['account']}...")
 
             result = execute_for_account(
                 account_config=account_config,
@@ -1112,8 +1227,28 @@ def close_positions(req: CloseRequest):
 
             if result["success"]:
                 successful_closures += 1
+                # Add profit to total
+                profit = result.get("profit", 0.0)
+                total_profit += profit
+                account_profits.append({
+                    "account": position["account"],
+                    "profit": profit
+                })
 
             time.sleep(1)
+
+        # Move session to history
+        now = datetime.now()
+        trade_history[req.session_id] = {
+            **session_data,
+            "closing_time": now.isoformat(),
+            "total_profit": total_profit,
+            "account_profits": account_profits,
+            "expired": False
+        }
+
+        # Remove from active sessions
+        del trade_sessions[req.session_id]
 
         response = {
             "success": successful_closures > 0,
@@ -1121,7 +1256,8 @@ def close_positions(req: CloseRequest):
             "total_positions": len(active_positions),
             "successful_closures": successful_closures,
             "failed_closures": len(active_positions) - successful_closures,
-            "results": results
+            "results": results,
+            "total_profit": total_profit
         }
 
         if successful_closures == 0:
@@ -1133,7 +1269,6 @@ def close_positions(req: CloseRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
 
 @app.get("/sessions")
 def get_sessions():
@@ -1161,6 +1296,67 @@ def get_session(session_id: str):
 def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "timestamp": time.time()}
+
+@app.get("/trade_history")
+def get_trade_history():
+    """Get trade history"""
+    return {"history": trade_history}
+
+@app.get("/position_details")
+def get_position_details(ticket: int, account: int):
+    """Get current SL/TP for a position"""
+    account_config = next((acc for acc in ACCOUNTS_CONFIG if acc["account"] == account), None)
+    if not account_config:
+        raise HTTPException(status_code=404, detail="Account config not found")
+
+    # Login to account
+    if not mt5.initialize(login=account_config["account"],
+                          password=account_config["password"],
+                          server=account_config["server"]):
+        error = mt5.last_error()
+        return {"success": False, "error": f"Login failed: {error}"}
+
+    time.sleep(0.5)  # Let terminal sync
+
+    # Get position details
+    positions = mt5.positions_get(ticket=ticket)
+    mt5.shutdown()
+
+    if not positions:
+        return {"success": False, "error": "Position not found"}
+
+    position = positions[0]
+    return {
+        "success": True,
+        "sl": position.sl,
+        "tp": position.tp
+    }
+
+@app.get("/dashboard_stats")
+def get_dashboard_stats():
+    active_count = len(trade_sessions)
+    total_profit = sum(session["total_profit"] for session in trade_history.values())
+
+    # Calculate today's P&L
+    today = datetime.now().date()
+    today_profit = sum(
+        session["total_profit"] for session in trade_history.values()
+        if datetime.fromisoformat(session["closing_time"]).date() == today
+    )
+
+    # Calculate success rate
+    successful_trades = sum(
+        1 for session in trade_history.values()
+        if session["total_profit"] > 0 and not session.get("expired", False)
+    )
+    success_rate = (successful_trades / len(trade_history)) * 100 if trade_history else 0
+
+    return {
+        "active_sessions": active_count,
+        "success_rate": round(success_rate, 1),
+        "today_pnl": today_profit,
+        "total_pnl": total_profit
+    }
 
 
 if __name__ == "__main__":

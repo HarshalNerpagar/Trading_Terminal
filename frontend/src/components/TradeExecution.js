@@ -466,7 +466,12 @@ export default function TradeExecutionPage() {
 
   const handleSubmit = async () => {
     if (isSubmitting) return;
-
+      const payload = {
+        pair: form.pair,
+        action: form.action,
+        stop_loss: parseFloat(form.stop_loss),
+        ...(form.target_level && { target_level: parseFloat(form.target_level) })
+      };
     // Clear previous results
     setLastTradeResult(null);
 
@@ -572,41 +577,33 @@ export default function TradeExecutionPage() {
     </button>
   );
 
-  const ResultDisplay = ({ result }) => {
-    if (!result) return null;
+const ResultDisplay = ({ result }) => {
+  if (!result) return null;
 
-    const isSuccess = result.success;
-    const Icon = isSuccess ? CheckCircle : XCircle;
-    const bgColor = isSuccess ? 'bg-emerald-900/50 border-emerald-700/50' : 'bg-red-900/50 border-red-700/50';
-    const textColor = isSuccess ? 'text-emerald-400' : 'text-red-400';
-
-    return (
-      <div className={`p-4 rounded-xl border ${bgColor} mb-6`}>
-        <div className={`flex items-center space-x-2 ${textColor} mb-2`}>
-          <Icon className="w-5 h-5" />
-          <span className="font-semibold">
-            {isSuccess ? 'Trade Executed Successfully!' : 'Trade Execution Failed'}
-          </span>
+  return (
+    <div className={`p-4 rounded-xl border mb-6 ${
+      result.success ? 'bg-emerald-900/50 border-emerald-700/50' : 'bg-red-900/50 border-red-700/50'
+    }`}>
+      {/* ... */}
+      {result.data ? (
+        <div className="text-slate-300 text-sm space-y-1">
+          <p>✓ Successful trades: {result.data.successful_trades}/{result.data.total_accounts}</p>
+          {result.data.results.map((accountResult, idx) => (
+            <div key={idx} className="flex justify-between">
+              <span>Account {accountResult.account}:</span>
+              <span className={accountResult.result.success ? 'text-emerald-400' : 'text-rose-400'}>
+                {accountResult.result.success ? 'Success' : 'Failed'}
+              </span>
+            </div>
+          ))}
         </div>
+      ) : (
+        <p className="text-slate-300 text-sm">{result.error}</p>
+      )}
+    </div>
+  );
+};
 
-        <p>Session ID: {result.data.session_id}</p>
-
-        {isSuccess && result.data ? (
-          <div className="text-slate-300 text-sm space-y-1">
-            <p>✓ Successful trades: {result.data.successful_trades}/{result.data.total_accounts}</p>
-            {result.data.failed_trades > 0 && (
-              <p className="text-amber-400">⚠ Failed trades: {result.data.failed_trades}</p>
-            )}
-            <p>Symbol: {result.data.trade_details.symbol}</p>
-            <p>Action: {result.data.trade_details.action.toUpperCase()}</p>
-            <p>Order Type: {result.data.trade_details.order_type.toUpperCase()}</p>
-          </div>
-        ) : (
-          <p className="text-slate-300 text-sm">{result.error}</p>
-        )}
-      </div>
-    );
-  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6">
