@@ -384,25 +384,21 @@
 
 
 
-import React, { useState, useEffect } from "react";
-import { TrendingUp, TrendingDown, Target, Shield, DollarSign, Zap, Clock, Activity, CheckCircle, XCircle, AlertCircle } from "lucide-react";
+import React, { useState } from "react";
+import {
+  TrendingUp,
+  TrendingDown,
+  Target,
+  Shield,
+  DollarSign,
+  Zap,
+  Clock,
+  Activity, // Added missing import
+  CheckCircle,
+  XCircle
+} from "lucide-react";
 
 export default function TradeExecutionPage() {
-  const [priceData, setPriceData] = useState({});
-  const [isConnected, setIsConnected] = useState(false);
-
-//   useEffect(() => {
-//   const ws = new WebSocket("ws://localhost:8000/ws/realtime-prices");
-//
-//   ws.onopen = () => setIsConnected(true);
-//   ws.onmessage = (event) => {
-//     setPriceData(JSON.parse(event.data));
-//   };
-//   ws.onclose = () => setIsConnected(false);
-//
-//   return () => ws.close();
-// }, []);
-
   const [form, setForm] = useState({
     pair: "",
     action: "buy",
@@ -417,10 +413,9 @@ export default function TradeExecutionPage() {
   const [focusedField, setFocusedField] = useState("");
   const [lastTradeResult, setLastTradeResult] = useState(null);
 
-  // Popular forex pairs
   const forexPairs = [
     "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD",
-    "NZDUSD", "EURJPY", "GBPJPY", "EURGBP", "AUDCAD", "CADJPY"
+    "NZDUSD", "EURJPY", "GBPJPY", "EURGBP", "AUDCAD", "CADJPY", "BTCUSD"
   ];
 
   const handleChange = (e) => {
@@ -428,8 +423,7 @@ export default function TradeExecutionPage() {
     setForm(prev => ({
       ...prev,
       [name]: value,
-      // Clear dependent fields when order type changes
-      ...(name === "order_type" && { entry_price: "", stop_loss: "", target_level: "" })
+      ...(name === "order_type" && value === "market" && { entry_price: "" })
     }));
   };
 
@@ -437,27 +431,27 @@ export default function TradeExecutionPage() {
     const errors = [];
 
     if (!form.pair) errors.push("Currency pair is required");
-    if (!form.action) errors.push("Trade direction is required");
     if (!form.risk_percent || form.risk_percent <= 0 || form.risk_percent > 10) {
       errors.push("Risk percentage must be between 0.1 and 10");
     }
-    if (!form.order_type) errors.push("Order type is required");
     if (!form.stop_loss || form.stop_loss <= 0) errors.push("Stop loss is required");
 
-    if (form.order_type === "limit" && (!form.entry_price || form.entry_price <= 0)) {
-      errors.push("Entry price is required for limit orders");
-    }
-
-    // Validate stop loss vs entry price logic
-    if (form.order_type === "limit" && form.entry_price && form.stop_loss) {
-      const entryPrice = parseFloat(form.entry_price);
-      const stopLoss = parseFloat(form.stop_loss);
-
-      if (form.action === "buy" && stopLoss >= entryPrice) {
-        errors.push("For BUY orders, stop loss must be below entry price");
+    if (form.order_type === "limit") {
+      if (!form.entry_price || form.entry_price <= 0) {
+        errors.push("Entry price is required for limit orders");
       }
-      if (form.action === "sell" && stopLoss <= entryPrice) {
-        errors.push("For SELL orders, stop loss must be above entry price");
+
+      // Validate stop loss vs entry price
+      if (form.entry_price && form.stop_loss) {
+        const entry = parseFloat(form.entry_price);
+        const sl = parseFloat(form.stop_loss);
+
+        if (form.action === "buy" && sl >= entry) {
+          errors.push("For BUY orders, stop loss must be below entry price");
+        }
+        if (form.action === "sell" && sl <= entry) {
+          errors.push("For SELL orders, stop loss must be above entry price");
+        }
       }
     }
 
@@ -466,16 +460,8 @@ export default function TradeExecutionPage() {
 
   const handleSubmit = async () => {
     if (isSubmitting) return;
-      const payload = {
-        pair: form.pair,
-        action: form.action,
-        stop_loss: parseFloat(form.stop_loss),
-        ...(form.target_level && { target_level: parseFloat(form.target_level) })
-      };
-    // Clear previous results
     setLastTradeResult(null);
 
-    // Validate form
     const validationErrors = validateForm();
     if (validationErrors.length > 0) {
       setLastTradeResult({
@@ -499,19 +485,13 @@ export default function TradeExecutionPage() {
         ...(form.order_type === "limit" && { entry_price: parseFloat(form.entry_price) })
       };
 
-      console.log("Sending payload:", payload);
-
       const response = await fetch("http://localhost:8000/trade_order", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json"
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
       const data = await response.json();
-      console.log("Response:", data);
 
       if (response.ok) {
         setLastTradeResult({
@@ -520,25 +500,24 @@ export default function TradeExecutionPage() {
           type: "success"
         });
 
-        // Reset form after successful execution
-        setForm({
+        // Reset form but keep order type
+        setForm(prev => ({
           pair: "",
           action: "buy",
           risk_percent: "1",
-          order_type: "market",
+          order_type: prev.order_type,
           entry_price: "",
           stop_loss: "",
           target_level: "",
-        });
+        }));
       } else {
         setLastTradeResult({
           success: false,
-          error: data.detail || "Unknown error occurred",
+          error: data.detail || "Trade execution failed",
           type: "api_error"
         });
       }
     } catch (error) {
-      console.error("Trade execution error:", error);
       setLastTradeResult({
         success: false,
         error: `Network error: ${error.message}`,
@@ -577,32 +556,45 @@ export default function TradeExecutionPage() {
     </button>
   );
 
-const ResultDisplay = ({ result }) => {
-  if (!result) return null;
+ const ResultDisplay = ({ result }) => {
+    if (!result) return null;
 
-  return (
-    <div className={`p-4 rounded-xl border mb-6 ${
-      result.success ? 'bg-emerald-900/50 border-emerald-700/50' : 'bg-red-900/50 border-red-700/50'
-    }`}>
-      {/* ... */}
-      {result.data ? (
-        <div className="text-slate-300 text-sm space-y-1">
-          <p>✓ Successful trades: {result.data.successful_trades}/{result.data.total_accounts}</p>
-          {result.data.results.map((accountResult, idx) => (
-            <div key={idx} className="flex justify-between">
-              <span>Account {accountResult.account}:</span>
-              <span className={accountResult.result.success ? 'text-emerald-400' : 'text-rose-400'}>
-                {accountResult.result.success ? 'Success' : 'Failed'}
-              </span>
-            </div>
-          ))}
+    return (
+      <div className={`p-4 rounded-xl border mb-6 ${
+        result.success ? 'bg-emerald-900/50 border-emerald-700/50' : 'bg-red-900/50 border-red-700/50'
+      }`}>
+        <div className="flex items-center mb-2">
+          {result.success ? (
+            <CheckCircle className="w-6 h-6 text-emerald-400 mr-2" />
+          ) : (
+            <XCircle className="w-6 h-6 text-red-400 mr-2" />
+          )}
+          <h3 className={`text-lg font-bold ${result.success ? 'text-emerald-400' : 'text-red-400'}`}>
+            {result.success ? 'Trade Executed Successfully!' : 'Trade Failed'}
+          </h3>
         </div>
-      ) : (
-        <p className="text-slate-300 text-sm">{result.error}</p>
-      )}
-    </div>
-  );
-};
+
+        {result.data ? (
+          <div className="text-slate-300 text-sm space-y-1">
+            <p>✓ Successful trades: {result.data.successful_trades}/{result.data.total_accounts}</p>
+            {result.data.results.map((accountResult, idx) => (
+  <div key={idx} className="flex justify-between">
+    <span>Account {accountResult.account}:</span>
+    <span className={accountResult.result.success ? 'text-emerald-400' : 'text-rose-400'}>
+      {accountResult.result.success ?
+        `Success (${accountResult.result.entry_type.toUpperCase()})` :
+        'Failed'
+      }
+    </span>
+  </div>
+))}
+          </div>
+        ) : (
+          <p className="text-slate-300 text-sm">{result.error}</p>
+        )}
+      </div>
+    );
+  };
 
 
   return (
@@ -740,64 +732,64 @@ const ResultDisplay = ({ result }) => {
               </div>
             </div>
 
-            {/* Order Parameters */}
-            <div className="space-y-4">
-              <div className="flex items-center space-x-2 text-slate-300 mb-3">
-                <Target className="w-5 h-5" />
-                <span className="font-medium">Order Parameters</span>
-              </div>
+       {/* Order Parameters */}
+      <div className="space-y-4">
+        <div className="flex items-center space-x-2 text-slate-300 mb-3">
+          <Target className="w-5 h-5" />
+          <span className="font-medium">Order Parameters</span>
+        </div>
 
-              {/* Limit Order - Entry Price */}
-              {form.order_type === "limit" && (
-                <div className="relative">
-                  <input
-                    name="entry_price"
-                    type="number"
-                    step="0.00001"
-                    placeholder="Entry Price (Required for Limit Orders)"
-                    value={form.entry_price}
-                    onChange={handleChange}
-                    onFocus={() => setFocusedField("entry_price")}
-                    onBlur={() => setFocusedField("")}
-                    className={inputClass("entry_price")}
-                    required
-                  />
-                </div>
-              )}
+        {/* Limit Order - Entry Price */}
+        {form.order_type === "limit" && (
+          <div className="relative">
+            <input
+              name="entry_price"
+              type="number"
+              step="0.00001"
+              placeholder="Entry Price (Required)"
+              value={form.entry_price}
+              onChange={handleChange}
+              onFocus={() => setFocusedField("entry_price")}
+              onBlur={() => setFocusedField("")}
+              className={inputClass("entry_price")}
+              required
+            />
+          </div>
+        )}
 
-              {/* Stop Loss (Required) */}
-              <div className="relative">
-                <Shield className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-red-400" />
-                <input
-                  name="stop_loss"
-                  type="number"
-                  step="0.00001"
-                  placeholder="Stop Loss Level (Required)"
-                  value={form.stop_loss}
-                  onChange={handleChange}
-                  onFocus={() => setFocusedField("stop_loss")}
-                  onBlur={() => setFocusedField("")}
-                  className={`${inputClass("stop_loss")} pl-10`}
-                  required
-                />
-              </div>
+        {/* Stop Loss */}
+        <div className="relative">
+          <Shield className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-red-400" />
+          <input
+            name="stop_loss"
+            type="number"
+            step="0.00001"
+            placeholder="Stop Loss Level (Required)"
+            value={form.stop_loss}
+            onChange={handleChange}
+            onFocus={() => setFocusedField("stop_loss")}
+            onBlur={() => setFocusedField("")}
+            className={`${inputClass("stop_loss")} pl-10`}
+            required
+          />
+        </div>
 
-              {/* Target Level (Optional) */}
-              <div className="relative">
-                <Target className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-emerald-400" />
-                <input
-                  name="target_level"
-                  type="number"
-                  step="0.00001"
-                  placeholder="Target Level (Optional)"
-                  value={form.target_level}
-                  onChange={handleChange}
-                  onFocus={() => setFocusedField("target_level")}
-                  onBlur={() => setFocusedField("")}
-                  className={`${inputClass("target_level")} pl-10`}
-                />
-              </div>
-            </div>
+        {/* Take Profit */}
+        <div className="relative">
+          <Target className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-emerald-400" />
+          <input
+            name="target_level"
+            type="number"
+            step="0.00001"
+            placeholder="Take Profit Level (Optional)"
+            value={form.target_level}
+            onChange={handleChange}
+            onFocus={() => setFocusedField("target_level")}
+            onBlur={() => setFocusedField("")}
+            className={`${inputClass("target_level")} pl-10`}
+          />
+        </div>
+      </div>
 
             {/* Execute Button */}
             <button

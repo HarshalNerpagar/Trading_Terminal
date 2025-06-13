@@ -1,519 +1,3 @@
-# from fastapi import FastAPI, HTTPException
-# from fastapi.middleware.cors import CORSMiddleware  # 👈 import CORS
-# from pydantic import BaseModel, validator
-# import MetaTrader5 as mt5
-# import time
-# app = FastAPI()
-#
-# # 👇 Add this block to allow requests from your frontend
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],  # Replace "*" with the actual frontend domain in production
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-#
-# class TradeRequest(BaseModel):
-#     account: int
-#     password: str
-#     server: str
-#     symbol: str
-#     action: str  # "buy" or "sell"
-#     entry_price: float
-#     stop_loss: float
-#     volume: float = 0.1  # default volume
-#
-#     @validator("action")
-#     def action_must_be_buy_or_sell(cls, v):
-#         if v.lower() not in ("buy", "sell"):
-#             raise ValueError("action must be 'buy' or 'sell'")
-#         return v.lower()
-#
-# def ensure_symbol_ready(symbol):
-#     info = mt5.symbol_info(symbol)
-#     if info is None:
-#         return False
-#     if not info.visible:
-#         return mt5.symbol_select(symbol, True)
-#     return True
-#
-# @app.get("/")
-# def root():
-#     return {"message": "Trading API is running. Use /place_trade to send trade requests."}
-#
-# @app.post("/trade_order")
-# def trade_order(req: TradeRequest):
-#     print(req)
-#     def find_matching_symbols(partial_name):
-#         symbols = mt5.symbols_get()
-#         if symbols is None:
-#             print("Failed to fetch symbols.")
-#             return []
-#         return [s.name for s in symbols if partial_name.upper() in s.name.upper()]
-#
-#     # Ensure the symbol is visible in Market Watch
-#     def ensure_symbol_ready(symbol):
-#         symbol_info = mt5.symbol_info(symbol)
-#         if symbol_info is None:
-#             print(f"Symbol {symbol} not found.")
-#             return False
-#
-#         if not symbol_info.visible:
-#             if not mt5.symbol_select(symbol, True):
-#                 print(f"Failed to select symbol {symbol}.")
-#                 return False
-#         return True
-#
-#     # Retry fetching a valid price
-#     def get_valid_price(symbol, action, retries=5):
-#         for i in range(retries):
-#             tick = mt5.symbol_info_tick(symbol)
-#             if tick:
-#                 price = tick.ask if action == "buy" else tick.bid
-#                 if price > 0:
-#                     return price
-#             print(f"[{symbol}] Waiting for valid price... Retry {i + 1}")
-#             time.sleep(1)
-#         return 0.0
-#
-#     # Place a trade safely
-#     def place_trade(symbol, action, volume, price, stop_loss, take_profit):
-#         order_type = mt5.ORDER_TYPE_BUY if action == "buy" else mt5.ORDER_TYPE_SELL
-#
-#         symbol_info = mt5.symbol_info(symbol)
-#         if symbol_info is None:
-#             print(f"Symbol info for {symbol} is not available.")
-#             return False
-#
-#         filling_mode = symbol_info.filling_mode
-#
-#         request = {
-#             "action": mt5.TRADE_ACTION_DEAL,
-#             "symbol": symbol,
-#             "volume": volume,
-#             "type": order_type,
-#             "price": price,
-#             "deviation": 10,
-#             "magic": 234000,
-#             "comment": "Automated trade",
-#             # "type_filling": "ORDER_FILLING_IOC",
-#             "type_time": mt5.ORDER_TIME_GTC,
-#         }
-#
-#         if stop_loss > 0:
-#             request["sl"] = stop_loss
-#         if take_profit > 0:
-#             request["tp"] = take_profit
-#
-#         print(f"Sending trade request: {request}")
-#         result = mt5.order_send(request)
-#
-#         if result is None:
-#             print("order_send() failed. Last error:", mt5.last_error())
-#             return False
-#
-#         if result.retcode != mt5.TRADE_RETCODE_DONE:
-#             print(f"Trade failed: retcode={result.retcode}, comment={result.comment}")
-#             return False
-#
-#         print(f"Trade successful! Order ID: {result.order}")
-#         return True
-#
-#     # Login and trade for each account
-#     def login_and_trade(account, password, server, symbol, action, volume):
-#         print(f"\nLogging in to account {account}...")
-#
-#         if not mt5.initialize(login=account, password=password, server=server):
-#             print(f"Login failed for account {account}. Error: {mt5.last_error()}")
-#             return
-#
-#         print(f"Logged in to account {account} successfully.")
-#         time.sleep(2)  # Let terminal sync
-#
-#         if not ensure_symbol_ready(symbol):
-#             print(f"Symbol {symbol} not ready for trading.")
-#             mt5.shutdown()
-#             return
-#
-#         price = get_valid_price(symbol, action)
-#         if price == 0.0:
-#             print(f"Failed to get a valid price for {symbol}. Aborting trade.")
-#             mt5.shutdown()
-#             return
-#
-#         print(f"Price for {symbol}: {price}")
-#         place_trade(symbol, action, volume, price, stop_loss=0, take_profit=0)
-#         mt5.shutdown()
-#         print(f"Logged out from account {account}.")
-#
-#     accounts_info = [
-#         {
-#             "account": 273162078,
-#             "password": "Carboncraft@333",
-#             "server": "Exness-MT5Trial6",
-#             # "symbol": "EURUSDm",  # Update this after verifying via find_matching_symbols
-#             # "action": "buy",
-#             "volume": 0.1
-#         },
-#         {
-#             "account": 204797825,
-#             "password": "Carboncraft@333",
-#             "server": "Exness-MT5Trial7",
-#             # "symbol": "GBPUSDm",  # Update this after verifying via find_matching_symbols
-#             # "action": "buy",
-#             "volume": 0.1
-#         },
-#     ]
-#
-#     for account in accounts_info:
-#         login_and_trade(account["account"], account["password"], account["server"], req.symbol, req.action, account["volume"])
-#         mt5.shutdown()
-#         # time.sleep(1)
-#
-# # def place_trade(req: TradeRequest):
-# #     print(req)
-# #     if not mt5.initialize(login=req.account, password=req.password, server=req.server):
-# #         raise HTTPException(status_code=400, detail=f"MT5 Init failed: {mt5.last_error()}")
-# #
-# #     if not ensure_symbol_ready(req.symbol):
-# #         mt5.shutdown()
-# #         raise HTTPException(status_code=400, detail=f"Symbol {req.symbol} not available")
-# #
-# #     order_type = mt5.ORDER_TYPE_BUY if req.action == "buy" else mt5.ORDER_TYPE_SELL
-# #
-# #     request = {
-# #         "action": mt5.TRADE_ACTION_DEAL,
-# #         "symbol": req.symbol,
-# #         "volume": req.volume,
-# #         "type": order_type,
-# #         "price": req.entry_price,
-# #         "sl": req.stop_loss,
-# #         "deviation": 10,
-# #         "magic": 234000,
-# #         "comment": "Trade from web UI",
-# #         "type_time": mt5.ORDER_TIME_GTC,
-# #     }
-# #
-# #     result = mt5.order_send(request)
-# #     mt5.shutdown()
-# #
-# #     if result is None:
-# #         raise HTTPException(status_code=500, detail=f"order_send() failed: {mt5.last_error()}")
-# #     if result.retcode != mt5.TRADE_RETCODE_DONE:
-# #         raise HTTPException(status_code=400, detail=f"Trade failed: {result.retcode}, {result.comment}")
-# #
-# #     return {"success": True, "order": result.order}
-
-# Version_01
-# from fastapi import FastAPI, HTTPException
-# from fastapi.middleware.cors import CORSMiddleware
-# from pydantic import BaseModel, validator
-# import MetaTrader5 as mt5
-# import time
-# import os
-# from typing import Optional
-#
-# app = FastAPI()
-#
-# # CORS middleware
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # More specific origins
-#     allow_credentials=True,
-#     allow_methods=["GET", "POST"],
-#     allow_headers=["*"],
-# )
-#
-#
-# class TradeRequest(BaseModel):
-#     pair: str
-#     action: str  # "buy" or "sell"
-#     risk_percent: float
-#     order_type: str  # "market" or "limit"
-#     stop_loss: float
-#     target_level: Optional[float] = None
-#     entry_price: Optional[float] = None
-#
-#     @validator("action")
-#     def action_must_be_buy_or_sell(cls, v):
-#         if v.lower() not in ("buy", "sell"):
-#             raise ValueError("action must be 'buy' or 'sell'")
-#         return v.lower()
-#
-#     @validator("order_type")
-#     def order_type_must_be_valid(cls, v):
-#         if v.lower() not in ("market", "limit"):
-#             raise ValueError("order_type must be 'market' or 'limit'")
-#         return v.lower()
-#
-#     @validator("risk_percent")
-#     def risk_percent_must_be_valid(cls, v):
-#         if v <= 0 or v > 10:
-#             raise ValueError("risk_percent must be between 0 and 10")
-#         return v
-#
-#
-# # Account configurations - Move to environment variables in production
-# ACCOUNTS_CONFIG = [
-#     {
-#         "account": 273162078,
-#         "password": "Carboncraft@333",
-#         "server": "Exness-MT5Trial6",
-#         "volume": 0.1
-#     },
-#     {
-#         "account": 204797825,
-#         "password": "Carboncraft@333",
-#         "server": "Exness-MT5Trial7",
-#         "volume": 0.1
-#     },
-# ]
-#
-#
-# def convert_symbol_format(pair: str) -> str:
-#     """Convert standard forex pair to broker-specific format"""
-#     # Add 'm' suffix for micro lots (adjust based on your broker)
-#     symbol_mappings = {
-#         "EURUSD": "EURUSDm",
-#         "GBPUSD": "GBPUSDm",
-#         "USDJPY": "USDJPYm",
-#         "USDCHF": "USDCHFm",
-#         "AUDUSD": "AUDUSDm",
-#         "USDCAD": "USDCADm",
-#         "NZDUSD": "NZDUSDm",
-#         "EURJPY": "EURJPYm",
-#         "GBPJPY": "GBPJPYm",
-#         "EURGBP": "EURGBPm",
-#         "AUDCAD": "AUDCADm",
-#         "CADJPY": "CADJPYm"
-#     }
-#     return symbol_mappings.get(pair, pair)
-#
-#
-# def ensure_symbol_ready(symbol: str) -> bool:
-#     """Ensure symbol is visible in Market Watch"""
-#     symbol_info = mt5.symbol_info(symbol)
-#     if symbol_info is None:
-#         print(f"Symbol {symbol} not found.")
-#         return False
-#
-#     if not symbol_info.visible:
-#         if not mt5.symbol_select(symbol, True):
-#             print(f"Failed to select symbol {symbol}.")
-#             return False
-#     return True
-#
-#
-# def get_valid_price(symbol: str, action: str, retries: int = 5) -> float:
-#     """Get valid price with retry mechanism"""
-#     for i in range(retries):
-#         tick = mt5.symbol_info_tick(symbol)
-#         if tick:
-#             price = tick.ask if action == "buy" else tick.bid
-#             if price > 0:
-#                 return price
-#         print(f"[{symbol}] Waiting for valid price... Retry {i + 1}")
-#         time.sleep(1)
-#     return 0.0
-#
-#
-# def calculate_position_size(symbol: str, risk_percent: float, stop_loss_pips: float, account_balance: float) -> float:
-#     """Calculate position size based on risk percentage"""
-#     # This is a simplified calculation - adjust based on your risk management rules
-#     symbol_info = mt5.symbol_info(symbol)
-#     if symbol_info is None:
-#         return 0.1  # Default volume
-#
-#     # Calculate risk amount
-#     risk_amount = account_balance * (risk_percent / 100)
-#
-#     # Calculate position size (simplified)
-#     # In production, you'd want more sophisticated position sizing
-#     pip_value = symbol_info.trade_tick_value
-#     if pip_value > 0 and stop_loss_pips > 0:
-#         position_size = risk_amount / (stop_loss_pips * pip_value)
-#         # Ensure minimum volume
-#         min_volume = symbol_info.volume_min
-#         return max(min_volume, round(position_size, 2))
-#
-#     return 0.1  # Default volume
-#
-#
-# def place_trade(symbol: str, action: str, volume: float, price: float, stop_loss: float,
-#                 take_profit: Optional[float] = None) -> dict:
-#     """Place a trade with comprehensive error handling"""
-#     try:
-#         order_type = mt5.ORDER_TYPE_BUY if action == "buy" else mt5.ORDER_TYPE_SELL
-#
-#         request = {
-#             "action": mt5.TRADE_ACTION_DEAL,
-#             "symbol": symbol,
-#             "volume": volume,
-#             "type": order_type,
-#             "price": price,
-#             "deviation": 20,  # Increased deviation for better fill rate
-#             "magic": 234000,
-#             "comment": "Automated trade via API",
-#             "type_time": mt5.ORDER_TIME_GTC,
-#         }
-#
-#         if stop_loss > 0:
-#             request["sl"] = stop_loss
-#         if take_profit and take_profit > 0:
-#             request["tp"] = take_profit
-#
-#         print(f"Sending trade request: {request}")
-#         result = mt5.order_send(request)
-#         print(f"Order sent: {result}")
-#
-#         if result is None:
-#             error = mt5.last_error()
-#             return {"success": False, "error": f"order_send() failed: {error}"}
-#
-#         if result.retcode != mt5.TRADE_RETCODE_DONE:
-#             return {
-#                 "success": False,
-#                 "error": f"Trade failed: retcode={result.retcode}, comment={result.comment}"
-#             }
-#
-#         return {
-#             "success": True,
-#             "order_id": result.order,
-#             "volume": result.volume,
-#             "price": result.price
-#         }
-#
-#     except Exception as e:
-#         return {"success": False, "error": f"Exception in place_trade: {str(e)}"}
-#
-#
-# def execute_trade_for_account(account_config: dict, symbol: str, action: str, volume: float,
-#                               stop_loss: float, take_profit: Optional[float] = None,
-#                               entry_price: Optional[float] = None) -> dict:
-#     """Execute trade for a specific account"""
-#     try:
-#         # Login to account
-#         if not mt5.initialize(login=account_config["account"],
-#                               password=account_config["password"],
-#                               server=account_config["server"]):
-#             error = mt5.last_error()
-#             return {"success": False, "error": f"Login failed for account {account_config['account']}: {error}"}
-#
-#         print(f"Logged in to account {account_config['account']} successfully.")
-#         time.sleep(1)  # Let terminal sync
-#
-#         # Ensure symbol is ready
-#         if not ensure_symbol_ready(symbol):
-#             mt5.shutdown()
-#             return {"success": False, "error": f"Symbol {symbol} not ready for trading"}
-#
-#         # Get price
-#         if entry_price is None:  # Market order
-#             price = get_valid_price(symbol, action)
-#             if price == 0.0:
-#                 mt5.shutdown()
-#                 return {"success": False, "error": f"Failed to get valid price for {symbol}"}
-#         else:  # Limit order
-#             price = entry_price
-#
-#         # Execute trade
-#         result = place_trade(symbol, action, volume, price, stop_loss, take_profit)
-#
-#         mt5.shutdown()
-#         return result
-#
-#     except Exception as e:
-#         mt5.shutdown()
-#         return {"success": False, "error": f"Exception in execute_trade_for_account: {str(e)}"}
-#
-#
-# @app.get("/")
-# def root():
-#     return {"message": "Trading API is running", "status": "healthy"}
-#
-#
-# @app.post("/trade_order")
-# def trade_order(req: TradeRequest):
-#     """Execute trade order across configured accounts"""
-#     try:
-#         # Convert symbol format
-#         symbol = convert_symbol_format(req.pair)
-#
-#         # Validate limit order requirements
-#         if req.order_type == "limit" and req.entry_price is None:
-#             raise HTTPException(status_code=400, detail="entry_price is required for limit orders")
-#
-#         results = []
-#         successful_trades = 0
-#
-#         # Execute trade for each account
-#         for account_config in ACCOUNTS_CONFIG:
-#             print(f"\nExecuting trade for account {account_config['account']}...")
-#
-#             result = execute_trade_for_account(
-#                 account_config=account_config,
-#                 symbol=symbol,
-#                 action=req.action,
-#                 volume=account_config["volume"],
-#                 stop_loss=req.stop_loss,
-#                 take_profit=req.target_level,
-#                 entry_price=req.entry_price if req.order_type == "limit" else None
-#             )
-#
-#             results.append({
-#                 "account": account_config["account"],
-#                 "result": result
-#             })
-#
-#             if result["success"]:
-#                 successful_trades += 1
-#
-#             time.sleep(1)  # Brief pause between accounts
-#
-#         # Prepare response
-#         response = {
-#             "success": successful_trades > 0,
-#             "total_accounts": len(ACCOUNTS_CONFIG),
-#             "successful_trades": successful_trades,
-#             "failed_trades": len(ACCOUNTS_CONFIG) - successful_trades,
-#             "results": results,
-#             "trade_details": {
-#                 "symbol": symbol,
-#                 "action": req.action,
-#                 "order_type": req.order_type,
-#                 "stop_loss": req.stop_loss,
-#                 "target_level": req.target_level,
-#                 "entry_price": req.entry_price
-#             }
-#         }
-#
-#         if successful_trades == 0:
-#             raise HTTPException(status_code=400, detail="All trades failed")
-#
-#         return response
-#
-#     except HTTPException:
-#         raise
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-#
-#
-# @app.get("/health")
-# def health_check():
-#     """Health check endpoint"""
-#     return {"status": "healthy", "timestamp": time.time()}
-#
-#
-# if __name__ == "__main__":
-#     import uvicorn
-#
-#     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
-
-
-############################
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -527,6 +11,7 @@ from datetime import datetime
 from datetime import timedelta
 import threading
 import time as t
+from typing import Optional
 
 app = FastAPI()
 
@@ -564,7 +49,16 @@ def clean_expired_sessions():
             for account_result in session_data["results"]:
                 if account_result["result"]["success"]:
                     # Attempt to close position and capture profit
-                    close_result = close_position_by_ticket(account_result["result"]["order_id"])
+                    entry_type = account_result["result"].get("entry_type", "position")
+                    if entry_type == "position":
+                        close_result = close_position_by_ticket(account_result["result"]["order_id"])
+                    else:  # It's an order
+                        delete_result = delete_order(account_result["result"]["order_id"])
+                        # Add to profits as 0 since it's not filled
+                        account_profits.append({
+                            "account": account_result["account"],
+                            "profit": 0.0
+                        })
                     if close_result["success"]:
                         profit = close_result.get("profit", 0)
                         total_profit += profit
@@ -728,7 +222,8 @@ def convert_symbol_format(pair: str) -> str:
         "GBPJPY": "GBPJPYm",
         "EURGBP": "EURGBPm",
         "AUDCAD": "AUDCADm",
-        "CADJPY": "CADJPYm"
+        "CADJPY": "CADJPYm",
+        "BTCUSD": "BTCUSDm",
     }
     return symbol_mappings.get(pair, pair)
 
@@ -768,32 +263,120 @@ def get_valid_price(symbol: str, action: str, retries: int = 5) -> float:
     return 0.0
 
 
-def place_trade(symbol: str, action: str, volume: float, price: float, stop_loss: float,
-                take_profit: Optional[float] = None) -> dict:
-    """Place a trade with comprehensive error handling"""
+# Updated place_trade function with proper limit order handling
+from typing import Optional
+
+
+def place_trade(order_type: str, symbol: str, action: str, volume: float, price: float, stop_loss: float,
+                take_profit: Optional[float] = None  ) -> dict:
     try:
-        order_type = mt5.ORDER_TYPE_BUY if action == "buy" else mt5.ORDER_TYPE_SELL
+        # Check symbol info
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info is None:
+            return {"success": False, "error": f"Symbol {symbol} not found"}
 
-        request = {
-            "action": mt5.TRADE_ACTION_DEAL,
-            "symbol": symbol,
-            "volume": volume,
-            "type": order_type,
-            "price": price,
-            "deviation": 20,
-            "magic": 234000,
-            "comment": "Automated trade via API",
-            "type_time": mt5.ORDER_TIME_GTC,
-        }
+        # Ensure symbol is visible and selected
+        if not ensure_symbol_ready(symbol):
+            return {"success": False, "error": f"Symbol {symbol} not ready for trading"}
 
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            return {"success": False, "error": f"Failed to get tick for {symbol}"}
+
+        # Normalize volume according to symbol specs
+        if symbol_info.volume_min:
+            volume = max(volume, symbol_info.volume_min)
+        if symbol_info.volume_step:
+            volume = round(volume / symbol_info.volume_step) * symbol_info.volume_step
+
+        if order_type == "market":
+
+            # Market order execution
+            order_type_mt5 = mt5.ORDER_TYPE_BUY if action.lower() == "buy" else mt5.ORDER_TYPE_SELL
+            trade_action = mt5.TRADE_ACTION_DEAL
+            price_for_order = tick.ask if action == "buy" else tick.bid  # Use current market price
+
+            request = {
+                "action": trade_action,
+                "symbol": symbol,
+                "volume": volume,
+                "type": order_type_mt5,
+                "price": price_for_order,
+                "deviation": 20,
+                "magic": 234000,
+                "comment": f"Automated {order_type} trade via API",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_FOK,
+            }
+
+        else:
+
+            # Limit order execution
+            if action.lower() == "buy":
+                order_type_mt5 = mt5.ORDER_TYPE_BUY_LIMIT
+                # Validate buy limit price is below current ask
+                if price >= tick.ask:
+                    return {"success": False,
+                            "error": f"Buy limit price ({price}) must be below current ask ({tick.ask})"}
+            else:
+                order_type_mt5 = mt5.ORDER_TYPE_SELL_LIMIT
+                # Validate sell limit price is above current bid
+                if price <= tick.bid:
+                    return {"success": False,
+                            "error": f"Sell limit price ({price}) must be above current bid ({tick.bid})"}
+
+            trade_action = mt5.TRADE_ACTION_PENDING
+
+            # Detect supported filling mode
+            filling_mode = symbol_info.filling_mode
+            if filling_mode & mt5.ORDER_FILLING_FOK:
+                type_filling = mt5.ORDER_FILLING_FOK
+            elif filling_mode & mt5.ORDER_FILLING_IOC:
+                type_filling = mt5.ORDER_FILLING_IOC
+            else:
+                type_filling = mt5.ORDER_FILLING_RETURN
+
+            request = {
+                "action": trade_action,
+                "symbol": symbol,
+                "volume": volume,
+                "type": order_type_mt5,
+                "price": price,
+                "deviation": 20,
+                "magic": 234000,
+                "comment": f"Automated {order_type} trade via API",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": type_filling,
+            }
+
+            print(f"Requestttttt: {request}")
+
+        # Add SL and TP if valid
         if stop_loss > 0:
             request["sl"] = stop_loss
         if take_profit and take_profit > 0:
             request["tp"] = take_profit
 
-        print(f"Sending trade request: {request}")
-        print(trade_sessions)
+        print(f"Sending {order_type} trade request: {request}")
+        check = mt5.order_check(request)
+        # if not check or check.retcode != mt5.TRADE_RETCODE_DONE:
+        #     return {
+        #         "success": False,
+        #         "error": f"Order check failed: {check.comment if check else 'Unknown error'}"
+        #     }
         result = mt5.order_send(request)
+        print(result)
+        # modify_request the result as a dictionary and display it element by element
+        result_dict = result._asdict()
+        print(f"sadasds {result_dict}")
+        for field in result_dict.keys():
+            print("   {}={}".format(field, result_dict[field]))
+            # if this is a trading modify_request structure, display it element by element as well
+            if field == "modify_request":
+                trademodify_request_dict = result_dict[field]._asdict()
+                for tradereq_filed in trademodify_request_dict:
+                    print("       trademodify_request: {}={}".format(tradereq_filed,
+                                                                     trademodify_request_dict[tradereq_filed]))
 
         if result is None:
             error = mt5.last_error()
@@ -805,15 +388,19 @@ def place_trade(symbol: str, action: str, volume: float, price: float, stop_loss
                 "error": f"Trade failed: retcode={result.retcode}, comment={result.comment}"
             }
 
+
+
         return {
             "success": True,
             "order_id": result.order,
             "volume": result.volume,
-            "price": result.price
+            "price": result.price,
+            "order_type": order_type
         }
 
     except Exception as e:
         return {"success": False, "error": f"Exception in place_trade: {str(e)}"}
+
 
 
 def modify_position_sl_tp(position_ticket: int, symbol: str, new_sl: Optional[float], new_tp: Optional[float]) -> dict:
@@ -972,19 +559,51 @@ def execute_for_account(account_config: dict, operation: str, **kwargs) -> dict:
                 volume=account_config["volume"],
                 price=price,
                 stop_loss=kwargs.get("stop_loss"),
-                take_profit=kwargs.get("take_profit")
+                take_profit=kwargs.get("take_profit"),
+                order_type=kwargs.get("order_type")
             )
+
 
         elif operation == "modify":
-            result = modify_position_sl_tp(
-                position_ticket=kwargs.get("ticket"),
-                symbol=kwargs.get("symbol"),
-                new_sl=kwargs.get("new_sl"),
-                new_tp=kwargs.get("new_tp")
-            )
+
+            if kwargs.get("entry_type") == "position":
+
+                result = modify_position_sl_tp(
+
+                    position_ticket=kwargs.get("ticket"),
+
+                    symbol=kwargs.get("symbol"),
+
+                    new_sl=kwargs.get("new_sl"),
+
+                    new_tp=kwargs.get("new_tp")
+
+                )
+
+            else:  # It's an order
+
+                result = modify_order(
+
+                    order_ticket=kwargs.get("ticket"),
+
+                    symbol=kwargs.get("symbol"),
+
+                    new_sl=kwargs.get("new_sl"),
+
+                    new_tp=kwargs.get("new_tp")
+
+                )
+
 
         elif operation == "close":
-            result = close_position_by_ticket(kwargs.get("ticket"))
+
+            if kwargs.get("entry_type") == "position":
+
+                result = close_position_by_ticket(kwargs.get("ticket"))
+
+            else:  # It's an order
+
+                result = delete_order(kwargs.get("ticket"))
 
         else:
             result = {"success": False, "error": f"Unknown operation: {operation}"}
@@ -995,6 +614,59 @@ def execute_for_account(account_config: dict, operation: str, **kwargs) -> dict:
     except Exception as e:
         mt5.shutdown()
         return {"success": False, "error": f"Exception in execute_for_account: {str(e)}"}
+
+
+def modify_order(order_ticket: int, symbol: str, new_sl: Optional[float], new_tp: Optional[float]) -> dict:
+    try:
+        order = mt5.orders_get(ticket=order_ticket)
+        if not order:
+            return {"success": False, "error": f"No order found with ticket {order_ticket}"}
+
+        order = order[0]
+        current_sl = order.sl
+        current_tp = order.tp
+
+        updated_sl = new_sl if new_sl is not None else current_sl
+        updated_tp = new_tp if new_tp is not None else current_tp
+
+        modify_request = {
+            "action": mt5.TRADE_ACTION_MODIFY,
+            "order": order_ticket,
+            "symbol": symbol,
+            "sl": updated_sl,
+            "tp": updated_tp,
+            "magic": 234000,
+            "comment": "Modify order via API",
+        }
+
+        result = mt5.order_send(modify_request)
+
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            return {"success": False, "error": f"Modify failed: {result.comment}"}
+
+        return {"success": True, "ticket": order_ticket}
+
+    except Exception as e:
+        return {"success": False, "error": f"Exception in modify_order: {str(e)}"}
+
+
+def delete_order(order_ticket: int) -> dict:
+    try:
+        delete_request = {
+            "action": mt5.TRADE_ACTION_REMOVE,
+            "order": order_ticket,
+            "comment": "Delete order via API",
+        }
+
+        result = mt5.order_send(delete_request)
+
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            return {"success": False, "error": f"Delete failed: {result.comment}"}
+
+        return {"success": True, "ticket": order_ticket}
+
+    except Exception as e:
+        return {"success": False, "error": f"Exception in delete_order: {str(e)}"}
 
 
 def get_active_positions_for_session(session_id: str) -> List[Dict]:
@@ -1066,9 +738,11 @@ def trade_order(req: TradeRequest):
                 action=req.action,
                 stop_loss=req.stop_loss,
                 take_profit=req.target_level,
-                entry_price=req.entry_price if req.order_type == "limit" else None
+                entry_price=req.entry_price if req.order_type == "limit" else None,
+                order_type=req.order_type,
             )
 
+            print(result)
             results.append({
                 "account": account_config["account"],
                 "result": result
@@ -1077,15 +751,23 @@ def trade_order(req: TradeRequest):
             if result["success"]:
                 successful_trades += 1
 
+            # In trade_order endpoint after placing trade
+            if result["success"]:
+                entry_type = "position" if req.order_type == "market" else "order"
+                result["entry_type"] = entry_type
+
             time.sleep(1)
 
         # Store session data
         trade_sessions[session_id] = {
+            "entry_type": entry_type,  # Add this line
             "timestamp": datetime.now().isoformat(),
             "total_accounts": len(ACCOUNTS_CONFIG),
             "successful_trades": successful_trades,
             "failed_trades": len(ACCOUNTS_CONFIG) - successful_trades,
             "results": results,
+            "order_type": req.order_type,  # Add order type to session
+            "entry_price": req.entry_price if req.order_type == "limit" else None,
             "trade_details": {
                 "symbol": symbol,
                 "action": req.action,

@@ -358,6 +358,14 @@ const handleCloseConfirm = async () => {
                                   )}
                                   <span>{new Date(sessionData.timestamp).toLocaleTimeString()}</span>
                                 </div>
+                                <div className="text-sm text-slate-400 flex flex-wrap gap-4">
+  <span>Type: {sessionData.entry_type.toUpperCase()}</span>
+  <span>SL: {sessionData.trade_details.stop_loss}</span>
+  {sessionData.trade_details.target_level && (
+    <span>TP: {sessionData.trade_details.target_level}</span>
+  )}
+  <span>{new Date(sessionData.timestamp).toLocaleTimeString()}</span>
+</div>
                               </div>
 
                               <div className="flex space-x-3">
