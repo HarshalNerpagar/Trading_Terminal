@@ -2,3 +2,5 @@ fastapi
 uvicorn[standard]
 MetaTrader5
 pydantic
+pytest
+httpx
