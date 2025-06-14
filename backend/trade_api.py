@@ -12,6 +12,10 @@ from datetime import timedelta
 import threading
 import time as t
 from typing import Optional
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -176,12 +180,12 @@ def ensure_symbol_ready(symbol: str) -> bool:
     """Ensure symbol is visible in Market Watch"""
     symbol_info = mt5.symbol_info(symbol)
     if symbol_info is None:
-        print(f"Symbol {symbol} not found.")
+        logger.error("Symbol %s not found.", symbol)
         return False
 
     if not symbol_info.visible:
         if not mt5.symbol_select(symbol, True):
-            print(f"Failed to select symbol {symbol}.")
+            logger.error("Failed to select symbol %s.", symbol)
             return False
     return True
 
@@ -194,7 +198,7 @@ def get_valid_price(symbol: str, action: str, retries: int = 5) -> float:
             price = tick.ask if action == "buy" else tick.bid
             if price > 0:
                 return price
-        print(f"[{symbol}] Waiting for valid price... Retry {i + 1}")
+        logger.info("[%s] Waiting for valid price... Retry %s", symbol, i + 1)
         time.sleep(1)
     return 0.0
 
@@ -285,7 +289,7 @@ def place_trade(order_type: str, symbol: str, action: str, volume: float, price:
                 "type_filling": type_filling,
             }
 
-            print(f"Requestttttt: {request}")
+            logger.debug("Request: %s", request)
 
         # Add SL and TP if valid
         if stop_loss > 0:
@@ -293,7 +297,7 @@ def place_trade(order_type: str, symbol: str, action: str, volume: float, price:
         if take_profit and take_profit > 0:
             request["tp"] = take_profit
 
-        print(f"Sending {order_type} trade request: {request}")
+        logger.info("Sending %s trade request: %s", order_type, request)
         check = mt5.order_check(request)
         # if not check or check.retcode != mt5.TRADE_RETCODE_DONE:
         #     return {
@@ -301,18 +305,21 @@ def place_trade(order_type: str, symbol: str, action: str, volume: float, price:
         #         "error": f"Order check failed: {check.comment if check else 'Unknown error'}"
         #     }
         result = mt5.order_send(request)
-        print(result)
+        logger.debug(result)
         # modify_request the result as a dictionary and display it element by element
         result_dict = result._asdict()
-        print(f"sadasds {result_dict}")
+        logger.debug("Result dict: %s", result_dict)
         for field in result_dict.keys():
-            print("   {}={}".format(field, result_dict[field]))
+            logger.debug("   %s=%s", field, result_dict[field])
             # if this is a trading modify_request structure, display it element by element as well
             if field == "modify_request":
                 trademodify_request_dict = result_dict[field]._asdict()
                 for tradereq_filed in trademodify_request_dict:
-                    print("       trademodify_request: {}={}".format(tradereq_filed,
-                                                                     trademodify_request_dict[tradereq_filed]))
+                    logger.debug(
+                        "       trademodify_request: %s=%s",
+                        tradereq_filed,
+                        trademodify_request_dict[tradereq_filed],
+                    )
 
         if result is None:
             error = mt5.last_error()
@@ -666,7 +673,7 @@ def trade_order(req: TradeRequest):
 
         # Execute trade for each account
         for account_config in ACCOUNTS_CONFIG:
-            print(f"\nExecuting trade for account {account_config['account']}...")
+            logger.info("Executing trade for account %s...", account_config['account'])
 
             result = execute_for_account(
                 account_config=account_config,
@@ -679,7 +686,7 @@ def trade_order(req: TradeRequest):
                 order_type=req.order_type,
             )
 
-            print(result)
+            logger.info(result)
             results.append({
                 "account": account_config["account"],
                 "result": result
@@ -756,7 +763,11 @@ def modify_positions(req: ModifyRequest):
             if not account_config:
                 continue
 
-            print(f"\nModifying position {position['ticket']} for account {position['account']}...")
+            logger.info(
+                "Modifying position %s for account %s...",
+                position['ticket'],
+                position['account'],
+            )
 
             result = execute_for_account(
                 account_config=account_config,
@@ -979,6 +990,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
-print(trade_sessions)
